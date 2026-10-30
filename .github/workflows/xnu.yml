@@ -217,7 +217,7 @@ jobs:
           XNU_BUILD_JOBS: ${{ steps.detect-parallelism.outputs.build_jobs }}
         run: |
           START_EPOCH=$(date +%s)
-          SRCROOT="BEGONIA-XNU/tools/dxb/xnu"
+          SRCROOT="${WORK_DIR}/xnu"
           OBJROOT="${BUILD_DIR}/xnu.obj"
           SYMROOT="${BUILD_DIR}/xnu.sym"
           DSTROOT="${FAKEROOT_DIR}"
@@ -467,7 +467,7 @@ jobs:
           MACHINE_CONFIG: BEGONIA
         run: |
           START_EPOCH=$(date +%s)
-          SRCROOT="BEGONIA-XNU/tools/dxb/xnu"
+          SRCROOT="${WORK_DIR}/xnu"
           OBJROOT="${BUILD_DIR}/xnu.obj"
           SYMROOT="${BUILD_DIR}/xnu.sym"
           DSTROOT="${FAKEROOT_DIR}"

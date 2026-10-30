@@ -1,0 +1,25 @@
+{
+  "project": "BEGONIA-XNU",
+  "target": "begonia/mt6785",
+  "phase": "pre-XNU-integration",
+  "artifacts": [
+    {
+      "path": "bootshim/Image",
+      "kind": "boot-shim",
+      "sha256": "9a82cc283448c5ed049550b41f98a43d422e435d5e104bc48331062e6e0190e8"
+    },
+    {
+      "path": "bootshim/shim.elf",
+      "kind": "boot-shim-elf",
+      "sha256": "2a2a7b1e25256c8d1171f60bf9a1118b434abcb8112e914942798e4cc5478504"
+    },
+    {
+      "path": "xnu.img",
+      "kind": "xnu-kernel-placeholder",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "hardware_tested": false,
+  "xnu_boot_verified": false,
+  "note": "fastboot boot -u <package>/bootshim/Image for temporary testing only"
+}

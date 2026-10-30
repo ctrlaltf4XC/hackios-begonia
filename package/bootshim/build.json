@@ -1,0 +1,8 @@
+{
+  "kind": "begonia-xnu-shim",
+  "cpu": "cortex-a55",
+  "bytes": 37477,
+  "sha256": "9a82cc283448c5ed049550b41f98a43d422e435d5e104bc48331062e6e0190e8",
+  "xnu_boot_verified": false,
+  "hardware_tested": false
+}

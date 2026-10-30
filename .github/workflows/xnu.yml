@@ -1,0 +1,527 @@
+name: XNU 8796 Build Performance Optimized (macOS CI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_config:
+        description: 'XNU kernel config (RELEASE / DEVELOPMENT / DEBUG)'
+        required: true
+        default: 'DEVELOPMENT'
+      machine_config:
+        description: 'XNU MACHINE_CONFIG (VMAPPLE / BEGONIA)'
+        required: true
+        default: 'VMAPPLE'
+      xnu_build_jobs:
+        description: 'Parallel compilation jobs (auto if empty)'
+        required: false
+        default: ''
+      build_kc:
+        description: 'Build Kernel Collection (kmutil create)'
+        required: true
+        default: 'false'
+      keep_going:
+        description: 'Run make -k to collect all compile errors'
+        required: true
+        default: 'true'
+      force_clean:
+        description: 'Force clean build (discard cache)'
+        required: true
+        default: 'false'
+
+env:
+  # Build engine (pinned — never modified)
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build
+  DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+  # XNU 8796 source (pinned — never substituted)
+  XNU_TAG: xnu-8796.141.3
+  XNU_COMMIT: 1b191cb58250d0705d8a51287127505aa4bc0789
+  # Xcode 15.4 (explicitly selected — never substituted)
+  XCODE_PATH: /Applications/Xcode_15.4.app/Contents/Developer
+  # macOS 13.5 -> XNU 8796.141.3 (RC_DARWIN_KERNEL_VERSION=22.6.0)
+  MACOS_VERSION: 13.5
+  # KDK required for macOS 13.5 / XNU 8796.141.3 (Kernel Debug Kit 13.5 build 22G74)
+  KDK_NAME: 'Kernel Debug Kit 13.5 build 22G74'
+  KDKROOT: /Library/Developer/KDKs/KDK_13.5_22G74.kdk
+  # Build paths (match dxb build.sh)
+  WORK_DIR: ${{ github.workspace }}/BEGONIA-XNU/tools/dxb
+  BUILD_DIR: ${{ github.workspace }}/BEGONIA-XNU/tools/dxb/build
+  FAKEROOT_DIR: ${{ github.workspace }}/BEGONIA-XNU/tools/dxb/fakeroot
+  CACHE_DIR: ${{ github.workspace }}/BEGONIA-XNU/tools/dxb/.cache
+  # Parallel compilation (auto-detected if not set)
+  XNU_BUILD_JOBS: ${{ inputs.xnu_build_jobs }}
+  # Build flags (never changed for optimization correctness)
+  KERNEL_CONFIG: ${{ inputs.kernel_config }}
+  MACHINE_CONFIG: ${{ inputs.machine_config }}
+  ARCH_CONFIG: ARM64
+  BUILD_LTO: 0
+  BUILD_WERROR: 0
+
+jobs:
+  xnu-baseline:
+    name: XNU 8796 Optimized Build (${{ inputs.machine_config }})
+    runs-on: macos-14
+    timeout-minutes: 120
+    outputs:
+      build_jobs: ${{ steps.detect-parallelism.outputs.build_jobs }}
+      clean_duration_sec: ${{ steps.clean-build.outputs.duration_sec }}
+      cache_restore_duration_sec: ${{ steps.cache-restore.outputs.duration_sec }}
+      cache_save_duration_sec: ${{ steps.cache-save.outputs.duration_sec }}
+    steps:
+      - name: Checkout BEGONIA-XNU repository
+        uses: actions/checkout@v4
+        with:
+          path: BEGONIA-XNU
+          fetch-depth: 1
+
+      - name: Select Xcode 15.4
+        run: |
+          sudo xcode-select -s "${XCODE_PATH}"
+          echo "DEVELOPER_DIR=${XCODE_PATH}" >> "$GITHUB_ENV"
+          echo "Selected Xcode: $(xcodebuild -version | head -1)"
+
+      - name: Verify required build tools
+        run: |
+          echo "=== xcodebuild ===" && xcodebuild -version
+          echo "=== xcrun ===" && xcrun --version
+          echo "=== mig ===" && xcrun --find mig
+          echo "=== clang ===" && xcrun --find clang
+          echo "=== ld ===" && xcrun --find ld
+          echo "=== kmutil ===" && xcrun --find kmutil
+          echo "=== hdiutil ===" && which hdiutil
+
+      - name: Inspect Kernel Debug Kits
+        run: |
+          echo "=== /Library/Developer/KDKs ==="
+          if [ -d /Library/Developer/KDKs ]; then
+            ls -la /Library/Developer/KDKs/
+          else
+            echo "KDKs directory does not exist yet."
+          fi
+
+      - name: Detect CPU and RAM limits for parallelism
+        id: detect-parallelism
+        run: |
+          CPU_COUNT=$(sysctl -n hw.ncpu 2>/dev/null || python3 -c "import os; print(os.cpu_count())")
+          MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo 8589934592)
+          MEM_GB=$(( MEM_BYTES / 1024 / 1024 / 1024 ))
+          # Conservative: 1 job per 2GB RAM, capped at CPU count
+          MEM_JOBS=$(( MEM_GB / 2 ))
+          if [ "${MEM_JOBS}" -lt 1 ]; then MEM_JOBS=1; fi
+          AUTO_JOBS=$CPU_COUNT
+          if [ "${MEM_JOBS}" -lt "${AUTO_JOBS}" ]; then AUTO_JOBS=${MEM_JOBS}; fi
+          # Honor user override
+          FINAL_JOBS="${XNU_BUILD_JOBS}"
+          if [ -z "${FINAL_JOBS}" ]; then FINAL_JOBS=${AUTO_JOBS}; fi
+          echo "CPU cores: ${CPU_COUNT}, RAM: ${MEM_GB}GB, auto jobs: ${AUTO_JOBS}, final jobs: ${FINAL_JOBS}"
+          echo "build_jobs=${FINAL_JOBS}" >> "$GITHUB_OUTPUT"
+          echo "XNU_BUILD_JOBS=${FINAL_JOBS}" >> "$GITHUB_ENV"
+
+      - name: Fetch pinned darwin-xnu-build engine
+        run: |
+          git init -q BEGONIA-XNU/tools/dxb
+          git -C BEGONIA-XNU/tools/dxb fetch -q --depth 1 "${DXB_REPO}" "${DXB_SHA}"
+          git -C BEGONIA-XNU/tools/dxb checkout -q FETCH_HEAD
+          echo "DXB engine pinned at: $(git -C BEGONIA-XNU/tools/dxb rev-parse HEAD)"
+
+      - name: Clone and verify exact XNU source commit
+        run: |
+          git clone --branch "${XNU_TAG}" https://github.com/apple-oss-distributions/xnu.git BEGONIA-XNU/tools/dxb/xnu
+          cd BEGONIA-XNU/tools/dxb/xnu
+          ACTUAL_COMMIT=$(git rev-parse HEAD)
+          ACTUAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "none")
+          echo "Cloned XNU tag: ${ACTUAL_TAG}"
+          echo "Cloned XNU commit: ${ACTUAL_COMMIT}"
+          if [ "${ACTUAL_COMMIT}" != "${XNU_COMMIT}" ]; then
+            echo "::error::XNU commit mismatch! Expected ${XNU_COMMIT}, got ${ACTUAL_COMMIT}"
+            exit 1
+          fi
+          echo "XNU commit verified: ${ACTUAL_COMMIT} (tag ${XNU_TAG})"
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew install jq gum bash cmake ninja
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+
+      - name: Install KDK (Kernel Debug Kit 13.5 build 22G74)
+        id: kdk
+        run: |
+          if [ -d "${KDKROOT}" ]; then
+            echo "KDK already installed at ${KDKROOT} — skipping installation."
+            echo "kdk_available=true" >> "$GITHUB_OUTPUT"
+            echo "kdk_skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "KDK not found at ${KDKROOT}. Attempting automatic download..."
+          KDK_URL=$(curl -s --max-time 60 --connect-timeout 30 \
+            "https://raw.githubusercontent.com/dortania/KdkSupportPkg/gh-pages/manifest.json" \
+            | jq -r --arg KDK_NAME "${KDK_NAME}" '.[] | select(.name==$KDK_NAME) | .url')
+          if [ -z "${KDK_URL}" ] || [ "${KDK_URL}" = "null" ]; then
+            echo "::error::Could not find KDK URL for '${KDK_NAME}' in the dortania KdkSupportPkg manifest."
+            echo "::error::KDK cannot be obtained automatically. See BUILD.md for manual installation instructions."
+            echo "kdk_available=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Downloading KDK from: ${KDK_URL}"
+          curl --progress-bar --max-time 900 --connect-timeout 60 -L -o /tmp/KDK.dmg "${KDK_URL}"
+          hdiutil attach /tmp/KDK.dmg
+          sudo installer -pkg '/Volumes/Kernel Debug Kit/KernelDebugKit.pkg' -target /
+          hdiutil detach '/Volumes/Kernel Debug Kit'
+          rm -f /tmp/KDK.dmg
+          if [ -d "${KDKROOT}" ]; then
+            echo "KDK installed successfully at ${KDKROOT}"
+            echo "kdk_available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::KDK installation failed — ${KDKROOT} not found after installer ran."
+            echo "::error::See BUILD.md for manual KDK installation instructions."
+            echo "kdk_available=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Restore cached build outputs
+        id: cache-restore
+        if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
+        uses: actions/cache/restore@v4
+        env:
+          # Cache key pinned to: runner OS, Xcode version, KDK version, XNU commit, build config
+          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-${{ env.MACHINE_CONFIG }}
+        with:
+          path: |
+            BEGONIA-XNU/tools/dxb/build
+            BEGONIA-XNU/tools/dxb/fakeroot
+            BEGONIA-XNU/tools/dxb/.cache
+          key: ${{ env.CACHE_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_KEY }}
+
+      - name: Record cache restore duration
+        id: cache-restore-timing
+        if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
+        run: |
+          echo "Cache restore completed for key: ${{ env.CACHE_KEY }}"
+
+      - name: Force clean (if requested)
+        if: inputs.force_clean == 'true'
+        run: |
+          rm -rf "${{ env.BUILD_DIR }}" "${{ env.FAKEROOT_DIR }}"
+          echo "Cleaned build and fakeroot directories."
+
+      - name: Build XNU kernel (incremental-aware, no guard)
+        id: xnu-build
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb
+        env:
+          DEVELOPER_DIR: "${XCODE_PATH}"
+          PATH: "${XCODE_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/bin:${XCODE_PATH}/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
+          XNU_BUILD_JOBS: ${{ steps.detect-parallelism.outputs.build_jobs }}
+        run: |
+          START_EPOCH=$(date +%s)
+          SRCROOT="BEGONIA-XNU/tools/dxb/xnu"
+          OBJROOT="${BUILD_DIR}/xnu.obj"
+          SYMROOT="${BUILD_DIR}/xnu.sym"
+          DSTROOT="${FAKEROOT_DIR}"
+          FAKEROOT_DIR="${FAKEROOT_DIR}"
+          KDKROOT="${KDKROOT}"
+
+          # Ensure dependency build outputs exist (dxb setup equivalent)
+          if [ ! -d "${OBJROOT}" ]; then mkdir -p "${OBJROOT}"; fi
+          if [ ! -d "${SYMROOT}" ]; then mkdir -p "${SYMROOT}"; fi
+
+          # DXB's build_xnu() has a guard that skips compilation if the kernel
+          # binary already exists, even when source files changed. We bypass
+          # that guard by calling make directly with the same parameters dxb
+          # uses, allowing make's timestamp-based dependency tracking to
+          # perform correct incremental rebuilds.
+          cd "${SRCROOT}"
+          make install -j"${XNU_BUILD_JOBS}" VERBOSE=YES \
+            SDKROOT=macosx \
+            TARGET_CONFIGS="${KERNEL_CONFIG} ${ARCH_CONFIG} ${MACHINE_CONFIG}" \
+            CONCISE=0 LOGCOLORS=y BUILD_WERROR=${BUILD_WERROR} BUILD_LTO=${BUILD_LTO} \
+            SRCROOT="${SRCROOT}" OBJROOT="${OBJROOT}" SYMROOT="${SYMROOT}" DSTROOT="${DSTROOT}" \
+            FAKEROOT_DIR="${FAKEROOT_DIR}" KDKROOT="${KDKROOT}" \
+            RC_DARWIN_KERNEL_VERSION=22.6.0 \
+            MEMORY_SIZE= PHYS_CPU_OVERRIDE= LOGICAL_CPU_OVERRIDE= \
+            KERNEL_BUILDS_IN_PARALLEL=1
+          END_EPOCH=$(date +%s)
+          DURATION=$(( END_EPOCH - START_EPOCH ))
+          echo "XNU build duration: ${DURATION} seconds"
+          echo "build_duration_sec=${DURATION}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute artifact checksums
+        id: checksums
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb
+        run: |
+          KERNEL_PATH="${BUILD_DIR}/xnu.obj/kernel.${KERNEL_CONFIG}.${MACHINE_CONFIG,,}"
+          if [ -f "${KERNEL_PATH}" ]; then
+            sha256sum "${KERNEL_PATH}" > "${KERNEL_PATH}.sha256"
+            echo "kernel_checksum=$(sha256sum "${KERNEL_PATH}" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            echo "Kernel artifact: ${KERNEL_PATH}"
+            echo "SHA256: $(sha256sum "${KERNEL_PATH}" | awk '{print $1}')"
+          else
+            echo "::warning::Kernel binary not found at ${KERNEL_PATH}"
+          fi
+
+      - name: Save cached build outputs
+        id: cache-save
+        if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
+        uses: actions/cache/save@v4
+        env:
+          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-${{ env.MACHINE_CONFIG }}
+        with:
+          path: |
+            BEGONIA-XNU/tools/dxb/build
+            BEGONIA-XNU/tools/dxb/fakeroot
+            BEGONIA-XNU/tools/dxb/.cache
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Record cache save duration
+        id: cache-save-timing
+        if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
+        run: |
+          echo "Cache save completed for key: ${{ env.CACHE_KEY }}"
+
+      - name: Upload XNU build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-build-${{ inputs.machine_config }}
+          path: |
+            BEGONIA-XNU/tools/dxb/build/
+            BEGONIA-XNU/tools/dxb/fakeroot/
+            BEGONIA-XNU/tools/dxb/xnu/xnu-*.sha256 2>/dev/null || true
+          retention-days: 7
+
+  xnu-begonia:
+    name: XNU 8796 with Begonia Platform Integration
+    needs: xnu-baseline
+    runs-on: macos-14
+    timeout-minutes: 120
+    if: needs.xnu-baseline.result == 'success'
+    outputs:
+      build_jobs: ${{ steps.detect-parallelism.outputs.build_jobs }}
+      build_duration_sec: ${{ steps.xnu-build.outputs.build_duration_sec }}
+      kernel_checksum: ${{ steps.checksums.outputs.kernel_checksum }}
+    steps:
+      - name: Checkout BEGONIA-XNU repository
+        uses: actions/checkout@v4
+        with:
+          path: BEGONIA-XNU
+          fetch-depth: 1
+
+      - name: Select Xcode 15.4
+        run: |
+          sudo xcode-select -s "${XCODE_PATH}"
+          echo "DEVELOPER_DIR=${XCODE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Verify required build tools
+        run: |
+          xcodebuild -version
+          xcrun --find mig
+          xcrun --find clang
+          xcrun --find ld
+          xcrun --find kmutil
+          which hdiutil
+
+      - name: Inspect Kernel Debug Kits
+        run: |
+          if [ -d /Library/Developer/KDKs ]; then
+            ls -la /Library/Developer/KDKs/
+          else
+            echo "KDKs directory does not exist yet."
+          fi
+
+      - name: Fetch pinned darwin-xnu-build engine
+        run: |
+          git init -q BEGONIA-XNU/tools/dxb
+          git -C BEGONIA-XNU/tools/dxb fetch -q --depth 1 "${DXB_REPO}" "${DXB_SHA}"
+          git -C BEGONIA-XNU/tools/dxb checkout -q FETCH_HEAD
+
+      - name: Clone and verify exact XNU source commit
+        run: |
+          git clone --branch "${XNU_TAG}" https://github.com/apple-oss-distributions/xnu.git BEGONIA-XNU/tools/dxb/xnu
+          cd BEGONIA-XNU/tools/dxb/xnu
+          ACTUAL_COMMIT=$(git rev-parse HEAD)
+          if [ "${ACTUAL_COMMIT}" != "${XNU_COMMIT}" ]; then
+            echo "::error::XNU commit mismatch! Expected ${XNU_COMMIT}, got ${ACTUAL_COMMIT}"
+            exit 1
+          fi
+          echo "XNU commit verified: ${ACTUAL_COMMIT}"
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew install jq gum bash cmake ninja
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+
+      - name: Install KDK (Kernel Debug Kit 13.5 build 22G74)
+        id: kdk
+        run: |
+          if [ -d "${KDKROOT}" ]; then
+            echo "KDK already installed at ${KDKROOT} — skipping installation."
+            echo "kdk_available=true" >> "$GITHUB_OUTPUT"
+            echo "kdk_skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "KDK not found at ${KDKROOT}. Attempting automatic download..."
+          KDK_URL=$(curl -s --max-time 60 --connect-timeout 30 \
+            "https://raw.githubusercontent.com/dortania/KdkSupportPkg/gh-pages/manifest.json" \
+            | jq -r --arg KDK_NAME "${KDK_NAME}" '.[] | select(.name==$KDK_NAME) | .url')
+          if [ -z "${KDK_URL}" ] || [ "${KDK_URL}" = "null" ]; then
+            echo "::error::Could not find KDK URL for '${KDK_NAME}' in the dortania KdkSupportPkg manifest."
+            echo "::error::KDK cannot be obtained automatically. See BUILD.md for manual installation instructions."
+            echo "kdk_available=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Downloading KDK from: ${KDK_URL}"
+          curl --progress-bar --max-time 900 --connect-timeout 60 -L -o /tmp/KDK.dmg "${KDK_URL}"
+          hdiutil attach /tmp/KDK.dmg
+          sudo installer -pkg '/Volumes/Kernel Debug Kit/KernelDebugKit.pkg' -target /
+          hdiutil detach '/Volumes/Kernel Debug Kit'
+          rm -f /tmp/KDK.dmg
+          if [ -d "${KDKROOT}" ]; then
+            echo "KDK installed successfully at ${KDKROOT}"
+            echo "kdk_available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::KDK installation failed — ${KDKROOT} not found after installer ran."
+            echo "::error::See BUILD.md for manual KDK installation instructions."
+            echo "kdk_available=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Restore cached build outputs
+        id: cache-restore
+        if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
+        uses: actions/cache/restore@v4
+        env:
+          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-begonia
+        with:
+          path: |
+            BEGONIA-XNU/tools/dxb/build
+            BEGONIA-XNU/tools/dxb/fakeroot
+            BEGONIA-XNU/tools/dxb/.cache
+          key: ${{ env.CACHE_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_KEY }}
+
+      - name: Force clean (if requested)
+        if: inputs.force_clean == 'true'
+        run: |
+          rm -rf "${{ env.BUILD_DIR }}" "${{ env.FAKEROOT_DIR }}"
+          echo "Cleaned build and fakeroot directories."
+
+      - name: Detect CPU and RAM limits for parallelism
+        id: detect-parallelism
+        run: |
+          CPU_COUNT=$(sysctl -n hw.ncpu 2>/dev/null || python3 -c "import os; print(os.cpu_count())")
+          MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo 8589934592)
+          MEM_GB=$(( MEM_BYTES / 1024 / 1024 / 1024 ))
+          MEM_JOBS=$(( MEM_GB / 2 ))
+          if [ "${MEM_JOBS}" -lt 1 ]; then MEM_JOBS=1; fi
+          AUTO_JOBS=$CPU_COUNT
+          if [ "${MEM_JOBS}" -lt "${AUTO_JOBS}" ]; then AUTO_JOBS=${MEM_JOBS}; fi
+          FINAL_JOBS="${XNU_BUILD_JOBS}"
+          if [ -z "${FINAL_JOBS}" ]; then FINAL_JOBS=${AUTO_JOBS}; fi
+          echo "CPU cores: ${CPU_COUNT}, RAM: ${MEM_GB}GB, auto jobs: ${AUTO_JOBS}, final jobs: ${FINAL_JOBS}"
+          echo "build_jobs=${FINAL_JOBS}" >> "$GITHUB_OUTPUT"
+          echo "XNU_BUILD_JOBS=${FINAL_JOBS}" >> "$GITHUB_ENV"
+
+      - name: Integrate Begonia platform into XNU source tree
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb/xnu
+        run: |
+          mkdir -p iokit/Kernel/arm
+          cp ../../../platform/begonia/BegoniaPlatformExpert.cpp iokit/Kernel/arm/
+          cp ../../../platform/begonia/BegoniaCPU.cpp iokit/Kernel/arm/
+          mkdir -p pexpert/pexpert/arm64
+          cp ../../../platform/begonia/begonia.h pexpert/pexpert/arm64/
+          echo "" >> iokit/conf/files.arm64
+          echo "# Begonia platform (optional iokitcpp)" >> iokit/conf/files.arm64
+          echo "iokit/Kernel/arm/BegoniaPlatformExpert.cpp                         optional iokitcpp" >> iokit/conf/files.arm64
+          echo "iokit/Kernel/arm/BegoniaCPU.cpp                                    optional iokitcpp" >> iokit/conf/files.arm64
+          echo "" >> pexpert/pexpert/arm64/board_config.h
+          echo "#ifdef ARM64_BOARD_CONFIG_BEGONIA" >> pexpert/pexpert/arm64/board_config.h
+          echo "#include <pexpert/arm64/begonia.h>" >> pexpert/pexpert/arm64/board_config.h
+          echo "" >> pexpert/pexpert/arm64/board_config.h
+          echo "#define MAX_L2_CLINE                   6" >> pexpert/pexpert/arm64/board_config.h
+          echo "#define MAX_CPUS                       8" >> pexpert/pexpert/arm64/board_config.h
+          echo "#define MAX_CPU_CLUSTERS               2" >> pexpert/pexpert/arm64/board_config.h
+          echo "" >> pexpert/pexpert/arm64/board_config.h
+          echo "#define CORE_NCTRS                     8" >> pexpert/pexpert/arm64/board_config.h
+          echo "" >> pexpert/pexpert/arm64/board_config.h
+          echo "#endif  /* ARM64_BOARD_CONFIG_BEGONIA */" >> pexpert/pexpert/arm64/board_config.h
+          echo "Begonia platform integrated into XNU source tree."
+
+      - name: Build XNU with Begonia platform (MACHINE_CONFIG=BEGONIA)
+        id: xnu-build
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb
+        env:
+          DEVELOPER_DIR: "${XCODE_PATH}"
+          PATH: "${XCODE_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/bin:${XCODE_PATH}/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
+          XNU_BUILD_JOBS: ${{ steps.detect-parallelism.outputs.build_jobs }}
+          MACHINE_CONFIG: BEGONIA
+        run: |
+          START_EPOCH=$(date +%s)
+          SRCROOT="BEGONIA-XNU/tools/dxb/xnu"
+          OBJROOT="${BUILD_DIR}/xnu.obj"
+          SYMROOT="${BUILD_DIR}/xnu.sym"
+          DSTROOT="${FAKEROOT_DIR}"
+          FAKEROOT_DIR="${FAKEROOT_DIR}"
+          KDKROOT="${KDKROOT}"
+          if [ ! -d "${OBJROOT}" ]; then mkdir -p "${OBJROOT}"; fi
+          if [ ! -d "${SYMROOT}" ]; then mkdir -p "${SYMROOT}"; fi
+          cd "${SRCROOT}"
+          make install -j"${XNU_BUILD_JOBS}" VERBOSE=YES \
+            SDKROOT=macosx \
+            TARGET_CONFIGS="${KERNEL_CONFIG} ${ARCH_CONFIG} ${MACHINE_CONFIG}" \
+            CONCISE=0 LOGCOLORS=y BUILD_WERROR=${BUILD_WERROR} BUILD_LTO=${BUILD_LTO} \
+            SRCROOT="${SRCROOT}" OBJROOT="${OBJROOT}" SYMROOT="${SYMROOT}" DSTROOT="${DSTROOT}" \
+            FAKEROOT_DIR="${FAKEROOT_DIR}" KDKROOT="${KDKROOT}" \
+            RC_DARWIN_KERNEL_VERSION=22.6.0 \
+            MEMORY_SIZE= PHYS_CPU_OVERRIDE= LOGICAL_CPU_OVERRIDE= \
+            KERNEL_BUILDS_IN_PARALLEL=1
+          END_EPOCH=$(date +%s)
+          DURATION=$(( END_EPOCH - START_EPOCH ))
+          echo "Begonia XNU build duration: ${DURATION} seconds"
+          echo "build_duration_sec=${DURATION}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute artifact checksums
+        id: checksums
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb
+        run: |
+          KERNEL_PATH="${BUILD_DIR}/xnu.obj/kernel.${KERNEL_CONFIG}.begonia"
+          if [ -f "${KERNEL_PATH}" ]; then
+            sha256sum "${KERNEL_PATH}" > "${KERNEL_PATH}.sha256"
+            echo "kernel_checksum=$(sha256sum "${KERNEL_PATH}" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            echo "Kernel artifact: ${KERNEL_PATH}"
+            echo "SHA256: $(sha256sum "${KERNEL_PATH}" | awk '{print $1}')"
+          else
+            echo "::warning::Kernel binary not found at ${KERNEL_PATH}"
+          fi
+
+      - name: Save cached build outputs
+        id: cache-save
+        if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
+        uses: actions/cache/save@v4
+        env:
+          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-begonia
+        with:
+          path: |
+            BEGONIA-XNU/tools/dxb/build
+            BEGONIA-XNU/tools/dxb/fakeroot
+            BEGONIA-XNU/tools/dxb/.cache
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Upload XNU build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-build-begonia
+          path: |
+            BEGONIA-XNU/tools/dxb/build/
+            BEGONIA-XNU/tools/dxb/fakeroot/
+          retention-days: 7

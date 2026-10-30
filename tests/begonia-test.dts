@@ -1,0 +1,73 @@
+/dts-v1/;
+/ {
+	model = "begonia-test";
+	compatible = "xiaomi,begonia", "mediatek,MT6785";
+	interrupt-parent = <&gic>;
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	chosen: chosen {
+		linux,initrd-start = <0 0x43000000>;
+		linux,initrd-end = <0 0x43800000>;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		cpu0: cpu@000 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a55";
+			reg = <0x0000>;
+			enable-method = "psci";
+		};
+		cpu1: cpu@001 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a55";
+			reg = <0x0100>;
+			enable-method = "psci";
+		};
+	};
+
+	memory: memory@40000000 {
+		device_type = "memory";
+		reg = <0 0x40000000 0 0x3e605000>;
+	};
+
+	reserved_mem: reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		reserve_test: reservation@0 {
+			compatible = "test,reservation";
+			no-map;
+			reg = <0 0x50000000 0 0x1000>;
+		};
+	};
+
+	uart0: serial@11002000 {
+		compatible = "mediatek,mt6577-uart";
+		reg = <0 0x11002000 0 0x1000>;
+		interrupts = <115 1>;
+	};
+
+	gic: interrupt-controller@0c000000 {
+		compatible = "arm,gic-v3";
+		#interrupt-cells = <3>;
+		#address-cells = <2>;
+		#size-cells = <2>;
+		reg = <0 0x0c000000 0 0x40000>,
+		      <0 0x0c040000 0 0x200000>;
+		interrupt-controller;
+	};
+
+	timer: timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <13 1>, <14 1>, <11 1>, <10 1>;
+		clock-frequency = <13000000>;
+	};
+
+	psci {
+		compatible = "arm,psci-1.0";
+		method = "smc";
+	};
+};

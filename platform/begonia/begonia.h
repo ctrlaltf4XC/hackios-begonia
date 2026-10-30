@@ -54,13 +54,23 @@
 #endif /* ! ASSEMBLER */
 
 /*
- * MediaTek numbers the architected timer PPIs as described in the POX DTS
- * arm,armv8-timer node: virtual timer CNTV is PPI 13 (INTID 16 + 13 = 29?
- * No: PPIs are INTID 16-31, so PPI 13 = INTID 29). The XNU sleh_irq reads
- * ICC_IAR1_EL1 directly; the ADT publishes virtual-timer-intid = 13 and
- * pe_fiq.c reads it via SecureDTGetProperty.
+ * MediaTek MT6785 architected timer PPI assignments from POX DTS
+ * (arch/arm64/boot/dts/mediatek/mt6785.dts:779-782, arm,armv8-timer node):
+ *   interrupts = <GIC_PPI 13>,   // secure physical timer (TrustZone-owned)
+ *                <GIC_PPI 14>,   // non-secure physical timer
+ *                <GIC_PPI 11>,   // virtual timer (CNTV)  <- XNU uses this
+ *                <GIC_PPI 10>;   // hypervisor timer
+ *
+ * PPIs are INTID 16-31, so:
+ *   PPI 10 = INTID 26 (hypervisor)
+ *   PPI 11 = INTID 27 (virtual)  <- XNU rtclock_intr / CNTV_CTL
+ *   PPI 13 = INTID 29 (secure physical)
+ *   PPI 14 = INTID 30 (non-secure physical)
+ *
+ * XNU's pe_fiq.c enables (1 << 27) for the virtual timer, matching PPI 11.
+ * BEGONIA_VTIMER_INTID must be the INTID (27), NOT the raw PPI number (11).
  */
-#define BEGONIA_VTIMER_INTID      13
+#define BEGONIA_VTIMER_INTID      27
 
 #define GIC_SPURIOUS_IRQ          1023    // IRQ no. for GIC spurious interrupt
 

@@ -303,6 +303,8 @@ jobs:
       build_jobs: ${{ steps.detect-parallelism.outputs.build_jobs }}
       build_duration_sec: ${{ steps.xnu-build.outputs.build_duration_sec }}
       kernel_checksum: ${{ steps.checksums.outputs.kernel_checksum }}
+    env:
+      MACHINE_CONFIG: BEGONIA
     steps:
       - name: Checkout BEGONIA-XNU repository
         uses: actions/checkout@v4
@@ -395,7 +397,7 @@ jobs:
         if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
         uses: actions/cache/restore@v4
         env:
-          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-begonia
+          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-${{ env.MACHINE_CONFIG }}
         with:
           path: |
             BEGONIA-XNU/tools/dxb/build
@@ -508,7 +510,7 @@ jobs:
         if: steps.kdk.outputs.kdk_available == 'true' && inputs.force_clean == 'false'
         uses: actions/cache/save@v4
         env:
-          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-begonia
+          CACHE_KEY: xnu-build-${{ runner.os }}-xcode15.4-kdk-22g74-${{ env.XNU_COMMIT }}-${{ env.KERNEL_CONFIG }}-${{ env.MACHINE_CONFIG }}
         with:
           path: |
             BEGONIA-XNU/tools/dxb/build

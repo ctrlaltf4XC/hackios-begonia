@@ -207,6 +207,28 @@ jobs:
           rm -rf "${{ env.BUILD_DIR }}" "${{ env.FAKEROOT_DIR }}"
           echo "Cleaned build and fakeroot directories."
 
+      - name: Ensure availability.pl exists for symbol aliasing
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb
+        run: |
+          # DXB's build_availabilityversions() builds availability.pl from
+          # apple-oss-distributions/AvailabilityVersions, but the $RELEASE_URL
+          # for macOS 14.8.x may not match any known tag, causing the clone to
+          # fail and availability.pl to be missing. make_symbol_aliasing.sh
+          # requires it at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl.
+          # A stub that exits 0 is sufficient for our kernel to boot; symbol
+          # aliasing is not required for correct execution.
+          mkdir -p "${FAKEROOT_DIR}/usr/local/libexec"
+          cat > "${FAKEROOT_DIR}/usr/local/libexec/availability.pl" <<'PERL'
+          #!/usr/bin/perl
+          # Stub availability.pl for XNU symbol aliasing.
+          # The real script (from apple-oss-distributions/AvailabilityVersions) generates
+          # availability annotations; a no-op stub is sufficient for kernel boot.
+          exit 0;
+          PERL
+          chmod +x "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
+          echo "availability.pl stub installed at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
+
       - name: Build XNU kernel (incremental-aware, no guard)
         id: xnu-build
         if: steps.kdk.outputs.kdk_available == 'true'
@@ -411,6 +433,28 @@ jobs:
         run: |
           rm -rf "${{ env.BUILD_DIR }}" "${{ env.FAKEROOT_DIR }}"
           echo "Cleaned build and fakeroot directories."
+
+      - name: Ensure availability.pl exists for symbol aliasing
+        if: steps.kdk.outputs.kdk_available == 'true'
+        working-directory: BEGONIA-XNU/tools/dxb
+        run: |
+          # DXB's build_availabilityversions() builds availability.pl from
+          # apple-oss-distributions/AvailabilityVersions, but the $RELEASE_URL
+          # for macOS 14.8.x may not match any known tag, causing the clone to
+          # fail and availability.pl to be missing. make_symbol_aliasing.sh
+          # requires it at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl.
+          # A stub that exits 0 is sufficient for our kernel to boot; symbol
+          # aliasing is not required for correct execution.
+          mkdir -p "${FAKEROOT_DIR}/usr/local/libexec"
+          cat > "${FAKEROOT_DIR}/usr/local/libexec/availability.pl" <<'PERL'
+          #!/usr/bin/perl
+          # Stub availability.pl for XNU symbol aliasing.
+          # The real script (from apple-oss-distributions/AvailabilityVersions) generates
+          # availability annotations; a no-op stub is sufficient for kernel boot.
+          exit 0;
+          PERL
+          chmod +x "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
+          echo "availability.pl stub installed at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
 
       - name: Detect CPU and RAM limits for parallelism
         id: detect-parallelism

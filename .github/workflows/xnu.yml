@@ -31,7 +31,7 @@ on:
 env:
   # Build engine (pinned — never modified)
   DXB_REPO: https://github.com/ctrlaltf4XC/darwin-xnu-build
-  DXB_SHA: 97fe912
+  DXB_SHA: main
   # XNU 8796 source (pinned — never substituted)
   XNU_TAG: xnu-8796.141.3
   XNU_COMMIT: 1b191cb58250d0705d8a51287127505aa4bc0789
@@ -120,7 +120,7 @@ jobs:
       - name: Fetch pinned darwin-xnu-build engine
         run: |
           git init -q BEGONIA-XNU/tools/dxb
-          git -C BEGONIA-XNU/tools/dxb fetch -q --depth 1 "${DXB_REPO}" "${DXB_SHA}"
+          git -C BEGONIA-XNU/tools/dxb fetch -q --depth 1 "${DXB_REPO}" main
           git -C BEGONIA-XNU/tools/dxb checkout -q FETCH_HEAD
           echo "DXB engine pinned at: $(git -C BEGONIA-XNU/tools/dxb rev-parse HEAD)"
 
@@ -369,7 +369,7 @@ jobs:
       - name: Fetch pinned darwin-xnu-build engine
         run: |
           git init -q BEGONIA-XNU/tools/dxb
-          git -C BEGONIA-XNU/tools/dxb fetch -q --depth 1 "${DXB_REPO}" "${DXB_SHA}"
+          git -C BEGONIA-XNU/tools/dxb fetch -q --depth 1 "${DXB_REPO}" main
           git -C BEGONIA-XNU/tools/dxb checkout -q FETCH_HEAD
 
       - name: Clone and verify exact XNU source commit

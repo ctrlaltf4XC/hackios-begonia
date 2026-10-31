@@ -215,16 +215,16 @@ jobs:
           # apple-oss-distributions/AvailabilityVersions, but the $RELEASE_URL
           # for macOS 14.8.x may not match any known tag, causing the clone to
           # fail and availability.pl to be missing. make_symbol_aliasing.sh
-          # requires it at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl.
-          # A stub that exits 0 is sufficient for our kernel to boot; symbol
-          # aliasing is not required for correct execution.
-          mkdir -p "${FAKEROOT_DIR}/usr/local/libexec"
-          cat > "${FAKEROOT_DIR}/usr/local/libexec/availability.pl" <<'PERL'
+          # looks for it at ${SDKROOT}//usr/local/libexec/availability.pl
+          # (DRIVERKITROOT is empty, producing a double slash). Symbol
+          # aliasing is not required for correct kernel boot on Begonia.
+          SDKROOT="/Applications/Xcode_15.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.5.sdk"
+          mkdir -p "${SDKROOT}/usr/local/libexec" "${FAKEROOT_DIR}/usr/local/libexec"
+          cat > "${SDKROOT}/usr/local/libexec/availability.pl" <<'PERL'
           #!/usr/bin/perl
           # Stub availability.pl for XNU symbol aliasing.
-          # The real script (from apple-oss-distributions/AvailabilityVersions) generates
-          # availability annotations; symbol aliasing is not required for correct
-          # kernel boot on Begonia. This stub outputs valid version strings so that
+          # Symbol aliasing is not required for correct kernel boot on Begonia.
+          # This stub outputs valid version strings so that
           # make_symbol_aliasing.sh can parse them without shell errors.
           if ($ARGV[0] eq '--ios') {
               print "17.0\n";
@@ -235,8 +235,10 @@ jobs:
           }
           exit 0;
           PERL
+          chmod +x "${SDKROOT}/usr/local/libexec/availability.pl"
+          cp "${SDKROOT}/usr/local/libexec/availability.pl" "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
           chmod +x "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
-          echo "availability.pl stub installed at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
+          echo "availability.pl stub installed at ${SDKROOT}/usr/local/libexec/availability.pl"
 
       - name: Build XNU kernel (incremental-aware, no guard)
         id: xnu-build
@@ -451,16 +453,16 @@ jobs:
           # apple-oss-distributions/AvailabilityVersions, but the $RELEASE_URL
           # for macOS 14.8.x may not match any known tag, causing the clone to
           # fail and availability.pl to be missing. make_symbol_aliasing.sh
-          # requires it at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl.
-          # A stub that exits 0 is sufficient for our kernel to boot; symbol
-          # aliasing is not required for correct execution.
-          mkdir -p "${FAKEROOT_DIR}/usr/local/libexec"
-          cat > "${FAKEROOT_DIR}/usr/local/libexec/availability.pl" <<'PERL'
+          # looks for it at ${SDKROOT}//usr/local/libexec/availability.pl
+          # (DRIVERKITROOT is empty, producing a double slash). Symbol
+          # aliasing is not required for correct kernel boot on Begonia.
+          SDKROOT="/Applications/Xcode_15.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.5.sdk"
+          mkdir -p "${SDKROOT}/usr/local/libexec" "${FAKEROOT_DIR}/usr/local/libexec"
+          cat > "${SDKROOT}/usr/local/libexec/availability.pl" <<'PERL'
           #!/usr/bin/perl
           # Stub availability.pl for XNU symbol aliasing.
-          # The real script (from apple-oss-distributions/AvailabilityVersions) generates
-          # availability annotations; symbol aliasing is not required for correct
-          # kernel boot on Begonia. This stub outputs valid version strings so that
+          # Symbol aliasing is not required for correct kernel boot on Begonia.
+          # This stub outputs valid version strings so that
           # make_symbol_aliasing.sh can parse them without shell errors.
           if ($ARGV[0] eq '--ios') {
               print "17.0\n";
@@ -471,8 +473,10 @@ jobs:
           }
           exit 0;
           PERL
+          chmod +x "${SDKROOT}/usr/local/libexec/availability.pl"
+          cp "${SDKROOT}/usr/local/libexec/availability.pl" "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
           chmod +x "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
-          echo "availability.pl stub installed at ${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
+          echo "availability.pl stub installed at ${SDKROOT}/usr/local/libexec/availability.pl"
 
       - name: Detect CPU and RAM limits for parallelism
         id: detect-parallelism

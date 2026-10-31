@@ -30,8 +30,8 @@ on:
 
 env:
   # Build engine (pinned — never modified)
-  DXB_REPO: https://github.com/blacktop/darwin-xnu-build
-  DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+  DXB_REPO: https://github.com/ctrlaltf4XC/darwin-xnu-build
+  DXB_SHA: 97fe912
   # XNU 8796 source (pinned — never substituted)
   XNU_TAG: xnu-8796.141.3
   XNU_COMMIT: 1b191cb58250d0705d8a51287127505aa4bc0789

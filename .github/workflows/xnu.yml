@@ -223,7 +223,16 @@ jobs:
           #!/usr/bin/perl
           # Stub availability.pl for XNU symbol aliasing.
           # The real script (from apple-oss-distributions/AvailabilityVersions) generates
-          # availability annotations; a no-op stub is sufficient for kernel boot.
+          # availability annotations; symbol aliasing is not required for correct
+          # kernel boot on Begonia. This stub outputs valid version strings so that
+          # make_symbol_aliasing.sh can parse them without shell errors.
+          if ($ARGV[0] eq '--ios') {
+              print "17.0\n";
+          } elsif ($ARGV[0] eq '--macosx') {
+              print "14.8.9\n";
+          } else {
+              print "14.8.9\n";
+          }
           exit 0;
           PERL
           chmod +x "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
@@ -450,7 +459,16 @@ jobs:
           #!/usr/bin/perl
           # Stub availability.pl for XNU symbol aliasing.
           # The real script (from apple-oss-distributions/AvailabilityVersions) generates
-          # availability annotations; a no-op stub is sufficient for kernel boot.
+          # availability annotations; symbol aliasing is not required for correct
+          # kernel boot on Begonia. This stub outputs valid version strings so that
+          # make_symbol_aliasing.sh can parse them without shell errors.
+          if ($ARGV[0] eq '--ios') {
+              print "17.0\n";
+          } elsif ($ARGV[0] eq '--macosx') {
+              print "14.8.9\n";
+          } else {
+              print "14.8.9\n";
+          }
           exit 0;
           PERL
           chmod +x "${FAKEROOT_DIR}/usr/local/libexec/availability.pl"
